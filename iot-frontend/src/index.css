@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+body {
+  background-color: #f8fafc;
+}
+
+@keyframes bounce-subtle {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3px); /* Nảy lên 4px */
+  }
+}
+
+.icon-bounce {
+  animation: bounce-subtle 1.2s ease-in-out infinite;
+}
