@@ -5,6 +5,10 @@ const mqtt = require('mqtt');
 const http = require('http');
 const { Server } = require('socket.io');
 
+// Import Swagger
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpec = require('./swagger'); 
+
 // Import DB và các Router
 const db = require('./config/db');
 const dashboardRoutes = require('./routes/dashboard');
@@ -12,17 +16,22 @@ const sensorRoutes = require('./routes/sensors');
 const deviceRoutes = require('./routes/devices');
 
 const app = express();
-const server = http.createServer(app);
 
-// Cấu hình Middleware
+// 1. Cấu hình Middleware (Nên đặt ở đây)
 app.use(cors());
 app.use(express.json());
 
+// 2. Tích hợp Swagger
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+
+// 3. Tạo HTTP Server cho Socket.io
+const server = http.createServer(app);
 const io = new Server(server, {
     cors: { origin: '*', methods: ['GET', 'POST'] }
 });
 
 app.set('socketio', io);
+
 // ==========================================
 // KẾT NỐI & XỬ LÝ MQTT
 // ==========================================
@@ -31,7 +40,6 @@ const mqttClient = mqtt.connect(process.env.MQTT_BROKER, {
     password: process.env.MQTT_PASS,
 });
 
-// Lưu mqttClient vào bộ nhớ của Express để các Router khác có thể lấy ra xài
 app.set('mqttClient', mqttClient);
 
 const SENSOR_MAP = { temperature: 1, humidity: 2, light: 3 };
@@ -45,7 +53,6 @@ mqttClient.on('connect', () => {
 mqttClient.on('message', async (topic, message) => {
     try {
         const payload = JSON.parse(message.toString());
-
         if (topic === 'sensor/data') {
             const { temperature, humidity, light } = payload;
             await db.query(
@@ -54,29 +61,18 @@ mqttClient.on('message', async (topic, message) => {
             );
             io.emit('realtime_sensor_data', payload);
         } 
-
         else if (topic === 'device/status') {
             const { device, state, result } = payload;
             const deviceId = DEVICE_MAP[device];
-
             if (deviceId) {
                 if (result === 'sync') {
-                    // KỊCH BẢN 1: ESP32 vừa khởi động, báo cáo trạng thái thực tế
                     const action = state === 'ON' ? 'TURN_ON' : 'TURN_OFF';
-                    
-                    // Ghi đè trạng thái mới nhất vào DB (Coi như thao tác thành công)
                     await db.query(
                         `INSERT INTO device_log (device_id, action, status) VALUES (?, ?, 'success')`,
                         [deviceId, action]
                     );
-                    
-                    // Bắn Socket về Frontend để UI tự động reset màu nút bấm (không cần F5)
                     io.emit('realtime_device_status', { device, state, result: 'success' });
-                    
-                    console.log(`[SYNC] Đã đồng bộ ${device} về trạng thái ${state} do thiết bị khởi động lại.`);
-
                 } else {
-                    // KỊCH BẢN 2: Xử lý lệnh bật/tắt bình thường từ người dùng
                     await db.query(
                         `UPDATE device_log 
                          SET status = ? 
@@ -84,7 +80,6 @@ mqttClient.on('message', async (topic, message) => {
                          ORDER BY id DESC LIMIT 1`,
                         [result, deviceId]
                     );
-                    
                     io.emit('realtime_device_status', payload);
                 }
             }
@@ -99,12 +94,13 @@ mqttClient.on('message', async (topic, message) => {
 // ==========================================
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/sensors', sensorRoutes);
-app.use('/api', deviceRoutes); // Gộp cả /device/control và /devices/logs vào đây
+app.use('/api', deviceRoutes); 
 
 // ==========================================
-// CHẠY SERVER
+// CHẠY SERVER (CHỈ DÙNG server.listen)
 // ==========================================
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => {
     console.log(`🚀 Server đang chạy tại http://localhost:${PORT}`);
+    console.log(`📖 Tài liệu API: http://localhost:${PORT}/api-docs`);
 });

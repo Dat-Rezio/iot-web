@@ -181,7 +181,6 @@ const ActionLogs = () => {
               <option value="">All Status</option>
               <option value="success">SUCCESS</option>
               <option value="failed">FAILED</option>
-              <option value="waiting">WAITING...</option>
             </select>
           </div>
           <div>

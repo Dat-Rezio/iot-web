@@ -2,64 +2,223 @@ const express = require('express');
 const router = express.Router();
 const db = require('../config/db');
 
+// ================= CONSTANTS =================
+
 const DEVICE_MAP = { led1: 1, led2: 2, led3: 3 };
 
-// API: Gửi lệnh điều khiển thiết bị
+// ================= SWAGGER TAGS =================
+
+/**
+ * @swagger
+ * tags:
+ *   name: Devices
+ *   description: API quản lý và điều khiển thiết bị (đèn LED, quạt, máy bơm...)
+ */
+
+// ================= SCHEMAS =================
+
+/**
+ * @swagger
+ * components:
+ *   schemas:
+ *     Device:
+ *       type: object
+ *       description: Thông tin một thiết bị
+ *       properties:
+ *         id:
+ *           type: integer
+ *           example: 1
+ *         device_name:
+ *           type: string
+ *           example: Đèn LED 1
+ *         description:
+ *           type: string
+ *           nullable: true
+ *           example: Đèn chiếu sáng khu vực A
+ *
+ *     DeviceCommand:
+ *       type: object
+ *       description: Lệnh điều khiển thiết bị
+ *       required:
+ *         - device
+ *         - state
+ *       properties:
+ *         device:
+ *           type: string
+ *           description: Mã định danh thiết bị
+ *           example: led1
+ *         state:
+ *           type: string
+ *           enum: [ON, OFF]
+ *           description: Trạng thái cần chuyển
+ *           example: ON
+ *
+ *     DeviceControlResponse:
+ *       type: object
+ *       description: Kết quả sau khi gửi lệnh điều khiển
+ *       properties:
+ *         message:
+ *           type: string
+ *           example: Command sent
+ *         logId:
+ *           type: integer
+ *           description: ID bản ghi log vừa được tạo
+ *           example: 105
+ *         status:
+ *           type: string
+ *           description: Trạng thái ban đầu của lệnh
+ *           example: waiting
+ *
+ *     DeviceStatus:
+ *       type: object
+ *       description: Trạng thái hiện tại của một thiết bị
+ *       properties:
+ *         device_id:
+ *           type: integer
+ *           example: 1
+ *         device_name:
+ *           type: string
+ *           example: Đèn LED 1
+ *         last_success_action:
+ *           type: string
+ *           nullable: true
+ *           enum: [TURN_ON, TURN_OFF]
+ *           description: Hành động thành công gần nhất (null nếu chưa từng thực thi)
+ *           example: TURN_ON
+ *
+ *     DeviceLog:
+ *       type: object
+ *       description: Một bản ghi lịch sử điều khiển thiết bị
+ *       properties:
+ *         id:
+ *           type: integer
+ *           example: 105
+ *         device_id:
+ *           type: integer
+ *           example: 1
+ *         device_name:
+ *           type: string
+ *           example: Đèn LED 1
+ *         action:
+ *           type: string
+ *           enum: [TURN_ON, TURN_OFF]
+ *           example: TURN_ON
+ *         status:
+ *           type: string
+ *           enum: [waiting, success, failed]
+ *           example: success
+ *         timestamp:
+ *           type: string
+ *           format: date-time
+ *           example: "2026-04-12T21:00:00Z"
+ *
+ *     DeviceLogResponse:
+ *       type: object
+ *       description: Kết quả phân trang lịch sử điều khiển thiết bị
+ *       properties:
+ *         data:
+ *           type: array
+ *           items:
+ *             $ref: '#/components/schemas/DeviceLog'
+ *         total:
+ *           type: integer
+ *           description: Tổng số bản ghi (không tính phân trang)
+ *           example: 45
+ */
+
+// ================= ROUTES =================
+
+/**
+ * @swagger
+ * /api/device/control:
+ *   post:
+ *     summary: Gửi lệnh bật/tắt thiết bị
+ *     description: >
+ *       Ghi lệnh vào database với trạng thái `waiting`, sau đó publish lên MQTT.
+ *       Nếu sau 10 giây không nhận được phản hồi, trạng thái sẽ tự động chuyển thành `failed`.
+ *     tags: [Devices]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/DeviceCommand'
+ *     responses:
+ *       200:
+ *         description: Lệnh đã được ghi nhận và gửi đi thành công
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/DeviceControlResponse'
+ *       500:
+ *         description: Lỗi server
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 router.post('/device/control', async (req, res) => {
     const { device, state } = req.body;
     const deviceId = DEVICE_MAP[device];
     const action = state === 'ON' ? 'TURN_ON' : 'TURN_OFF';
 
     try {
-        // 1. Tạo bản ghi trạng thái 'waiting' ngay lập tức
         const [result] = await db.query(
             `INSERT INTO device_log (device_id, action, status) VALUES (?, ?, 'waiting')`,
             [deviceId, action]
         );
         const logId = result.insertId;
 
-        // 2. Gửi lệnh qua MQTT
         const mqttClient = req.app.get('mqttClient');
-        const payload = JSON.stringify({ device, state });
-        
-        mqttClient.publish('device/control', payload);
+        mqttClient.publish('device/control', JSON.stringify({ device, state }));
 
-        // 3. Thiết lập Timeout 10 giây
         setTimeout(async () => {
             try {
-                // Kiểm tra lại Database xem bản ghi này còn là 'waiting' không
                 const [rows] = await db.query(`SELECT status FROM device_log WHERE id = ?`, [logId]);
-                
+
                 if (rows.length > 0 && rows[0].status === 'waiting') {
-                    // Chắc chắn cập nhật Database thành 'failed'
                     await db.query(`UPDATE device_log SET status = 'failed' WHERE id = ?`, [logId]);
-                    
-                    // Lấy biến io ra một cách an toàn
+
                     const io = req.app.get('socketio');
-                    
-                    // Kiểm tra xem io có tồn tại không rồi mới emit để chống crash
-                    if (io) {
-                        io.emit('realtime_device_status', { device, state, result: 'failed', logId });
-                    } else {
-                        console.warn("Bỏ qua gửi Socket: Biến 'io' chưa được khởi tạo đúng cách.");
-                    }
+                    io?.emit('realtime_device_status', { device, state, result: 'failed', logId });
                 }
             } catch (err) {
-                // Nếu có lỗi SQL hoặc lỗi logic, in ra log chứ tuyệt đối KHÔNG làm sập server
-                console.error("Lỗi ngầm trong quá trình xử lý Timeout 10s:", err.message);
+                console.error("Timeout error:", err.message);
             }
         }, 10000);
 
         res.json({ message: 'Command sent', logId, status: 'waiting' });
+
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-// API: Lấy trạng thái hiện tại (mới nhất) của các thiết bị
+/**
+ * @swagger
+ * /api/devices/status:
+ *   get:
+ *     summary: Lấy trạng thái hiện tại của tất cả thiết bị
+ *     description: Trả về hành động thành công gần nhất của từng thiết bị, dùng để hiển thị trạng thái bật/tắt trên dashboard.
+ *     tags: [Devices]
+ *     responses:
+ *       200:
+ *         description: Danh sách trạng thái thiết bị
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/DeviceStatus'
+ *       500:
+ *         description: Lỗi server
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 router.get('/devices/status', async (req, res) => {
     try {
-        // Query này lấy ra hành động SUCCESS mới nhất cho từng thiết bị
         const [rows] = await db.query(`
             SELECT d.id as device_id, d.device_name,
             (SELECT action FROM device_log 
@@ -67,14 +226,36 @@ router.get('/devices/status', async (req, res) => {
              ORDER BY id DESC LIMIT 1) as last_success_action
             FROM devices d
         `);
-        
+
         res.json(rows);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-// API MỚI: Lấy danh sách thiết bị đổ vào Dropdown
+/**
+ * @swagger
+ * /api/devices/list:
+ *   get:
+ *     summary: Lấy danh sách tất cả thiết bị
+ *     description: Trả về danh sách thiết bị, thường dùng để đổ vào dropdown hoặc bộ lọc.
+ *     tags: [Devices]
+ *     responses:
+ *       200:
+ *         description: Danh sách thiết bị
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/Device'
+ *       500:
+ *         description: Lỗi server
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 router.get('/devices/list', async (req, res) => {
     try {
         const [rows] = await db.query('SELECT id, device_name FROM devices');
@@ -84,84 +265,156 @@ router.get('/devices/list', async (req, res) => {
     }
 });
 
-// API CẬP NHẬT: Lấy danh sách Action Logs (Có phân trang, lọc, sắp xếp)
+/**
+ * @swagger
+ * /api/devices/logs:
+ *   get:
+ *     summary: Lấy lịch sử điều khiển thiết bị
+ *     description: Hỗ trợ tìm kiếm, lọc nhiều điều kiện và phân trang.
+ *     tags: [Devices]
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 10
+ *         description: Số bản ghi trên mỗi trang
+ *       - in: query
+ *         name: offset
+ *         schema:
+ *           type: integer
+ *           default: 0
+ *         description: Vị trí bắt đầu lấy dữ liệu
+ *       - in: query
+ *         name: sortBy
+ *         schema:
+ *           type: string
+ *           enum: [id, timestamp]
+ *           default: id
+ *         description: Cột dùng để sắp xếp
+ *       - in: query
+ *         name: sortOrder
+ *         schema:
+ *           type: string
+ *           enum: [ASC, DESC]
+ *           default: DESC
+ *         description: Thứ tự sắp xếp
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: Tìm kiếm theo tên thiết bị hoặc thời gian (dd/mm/yyyy, hh:mm:ss)
+ *       - in: query
+ *         name: logId
+ *         schema:
+ *           type: string
+ *         description: Lọc theo ID bản ghi log (hỗ trợ tìm gần đúng)
+ *       - in: query
+ *         name: deviceId
+ *         schema:
+ *           type: integer
+ *         description: Lọc theo ID thiết bị
+ *       - in: query
+ *         name: deviceName
+ *         schema:
+ *           type: string
+ *         description: Lọc theo tên thiết bị (khớp chính xác)
+ *       - in: query
+ *         name: action
+ *         schema:
+ *           type: string
+ *           enum: [TURN_ON, TURN_OFF]
+ *         description: Lọc theo loại hành động
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [success, failed, waiting]
+ *         description: Lọc theo trạng thái thực thi
+ *       - in: query
+ *         name: timestamp
+ *         schema:
+ *           type: string
+ *         description: Lọc theo thời gian (hỗ trợ tìm gần đúng, định dạng dd/mm/yyyy, hh:mm:ss)
+ *     responses:
+ *       200:
+ *         description: Danh sách lịch sử điều khiển có phân trang
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/DeviceLogResponse'
+ *       500:
+ *         description: Lỗi server
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 router.get('/devices/logs', async (req, res) => {
     const limit = parseInt(req.query.limit) || 10;
     const offset = parseInt(req.query.offset) || 0;
-    
-    // Nhận thêm sortBy và sortOrder
+
     const { search, logId, deviceId, deviceName, action, status, timestamp, sortBy, sortOrder } = req.query;
 
     try {
         let whereClause = 'WHERE 1=1';
         const queryParams = [];
 
-        // 1. Tìm kiếm chung (Sửa DATE_FORMAT thành 24h: %H)
         if (search) {
             whereClause += ` AND (d.device_name LIKE ? OR DATE_FORMAT(dl.timestamp, '%d/%m/%Y, %H:%i:%s') LIKE ?)`;
             queryParams.push(`%${search}%`, `%${search}%`);
         }
 
-        // 2. Lọc theo Logs ID bằng LIKE
         if (logId) {
             whereClause += ` AND dl.id LIKE ?`;
             queryParams.push(`%${logId}%`);
         }
 
-        // 3. Lọc theo Device ID
         if (deviceId) {
-            const cleanDeviceId = deviceId.replace(/\D/g, ''); 
+            const cleanDeviceId = deviceId.replace(/\D/g, '');
             if (cleanDeviceId) {
                 whereClause += ` AND dl.device_id = ?`;
                 queryParams.push(cleanDeviceId);
             }
         }
 
-        // 4. Lọc theo Device Name
         if (deviceName) {
             whereClause += ` AND d.device_name = ?`;
             queryParams.push(deviceName);
         }
 
-        // 5. Lọc theo Action
         if (action) {
             whereClause += ` AND dl.action = ?`;
             queryParams.push(action);
         }
 
-        // 6. Lọc theo Status
         if (status) {
             whereClause += ` AND dl.status = ?`;
             queryParams.push(status);
         }
 
-        // 7. Lọc theo Timestamp (Sửa DATE_FORMAT thành 24h: %H)
         if (timestamp) {
             whereClause += ` AND DATE_FORMAT(dl.timestamp, '%d/%m/%Y, %H:%i:%s') LIKE ?`;
             queryParams.push(`%${timestamp}%`);
         }
 
-        // --- LOGIC SẮP XẾP ĐỘNG ĐƠN LẺ ---
         const validSortColumns = {
-            'id': 'dl.id',
-            'timestamp': 'dl.timestamp'
+            id: 'dl.id',
+            timestamp: 'dl.timestamp'
         };
-        
-        // Mặc định sắp xếp theo id nếu không truyền
-        const dbSortColumn = validSortColumns[sortBy] || 'dl.id';
-        const dbSortOrder = (sortOrder === 'ASC') ? 'ASC' : 'DESC';
 
-        const orderByClause = `ORDER BY ${dbSortColumn} ${dbSortOrder}`;
+        const dbSortColumn = validSortColumns[sortBy] || 'dl.id';
+        const dbSortOrder = sortOrder === 'ASC' ? 'ASC' : 'DESC';
 
         const dataQuery = `
-            SELECT dl.id, dl.device_id, d.device_name, dl.action, dl.status, dl.timestamp 
+            SELECT dl.id, dl.device_id, d.device_name, dl.action, dl.status, dl.timestamp
             FROM device_log dl
             JOIN devices d ON dl.device_id = d.id
             ${whereClause}
-            ${orderByClause} 
+            ORDER BY ${dbSortColumn} ${dbSortOrder}
             LIMIT ? OFFSET ?
         `;
-        
+
         const countQuery = `
             SELECT COUNT(*) as total
             FROM device_log dl
@@ -176,6 +429,7 @@ router.get('/devices/logs', async (req, res) => {
             data: rows,
             total: countResult[0].total
         });
+
     } catch (error) {
         res.status(500).json({ error: error.message });
     }

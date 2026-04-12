@@ -208,12 +208,27 @@ void loop() {
     float t = dht.readTemperature();
 
     int rawLight = analogRead(LIGHT_SENSOR_PIN);
-    int lightValue = 4095 - rawLight;
+
+    const float GAMMA = 0.7;    // Đặc tính của LDR
+    const float RL10 = 50;     // Điện trở của LDR ở 10 Lux (đơn vị kOhm, thường là 50)
+    const float R_FIXED = 10.0; // Điện trở cố định bạn dùng (10kOhm)
+
+    // 1. Chuyển ADC sang điện áp
+    float voltage = rawLight / 4095.0 * 3.3;
+    // Tránh để voltage quá gần 3.3V (gây lỗi chia cho 0)
+    if (voltage > 3.25) voltage = 3.25; 
+    // 2. Tính điện trở LDR
+    float resistance = R_FIXED * voltage / (3.3 - voltage);
+    // 3. Tính Lux
+    float lux_raw = pow(RL10 * pow(10, GAMMA) / resistance, 1 / GAMMA);
+    // 4. Giới hạn Lux trong khoảng thực tế (ví dụ tối đa 50,000)
+    // Hàm constrain(giá trị, thấp nhất, cao nhất)
+    int lux_final = constrain(round(lux_raw), 0, 2000);
 
     StaticJsonDocument<200> doc;
     doc["temperature"] = t;
     doc["humidity"] = h;
-    doc["light"] = lightValue;
+    doc["light"] = lux_final;
 
     char buffer[200];
     serializeJson(doc, buffer);

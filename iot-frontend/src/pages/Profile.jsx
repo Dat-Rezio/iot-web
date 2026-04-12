@@ -65,19 +65,19 @@ const Profile = () => {
           <div className="flex flex-col sm:flex-row py-4">
             <span className="text-sm font-medium text-gray-500 sm:w-1/3">Figma</span>
             <div className="sm:w-2/3">
-              <a href="https://www.figma.com/design/ThoQCghB1Oc9jziMehkFhf/IOT-Design?node-id=3-8535&t=RZeTq5H6BcKS2nsl-0" target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-gray-800 hover:text-blue-600 transition-colors">Click here</a>
+              <a href="https://www.figma.com/design/ThoQCghB1Oc9jziMehkFhf/IOT-Design?node-id=3-8535&t=RZeTq5H6BcKS2nsl-0" target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-gray-800 hover:text-blue-600 transition-colors">https://www.figma.com/design/ThoQCghB1Oc9jziMehkFhf/IOT-Design?node-id=3-8535&t=RZeTq5H6BcKS2nsl-0</a>
             </div>
           </div>
           <div className="flex flex-col sm:flex-row py-4">
             <span className="text-sm font-medium text-gray-500 sm:w-1/3">API Docs</span>
             <div className="sm:w-2/3">
-              <a href="#" target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-gray-800 hover:text-blue-600 transition-colors">Link</a>
+              <a href="http://localhost:5000/api-docs/" target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-gray-800 hover:text-blue-600 transition-colors">http://localhost:5000/api-docs/</a>
             </div>
           </div>
           <div className="flex flex-col sm:flex-row py-4 last:pb-0">
             <span className="text-sm font-medium text-gray-500 sm:w-1/3">Github</span>
             <div className="sm:w-2/3">
-              <a href="#" target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-gray-800 hover:text-blue-600 transition-colors">Link</a>
+              <a href="https://github.com/Dat-Rezio/iot-web" target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-gray-800 hover:text-blue-600 transition-colors">https://github.com/Dat-Rezio/iot-web</a>
             </div>
           </div>
         </div>
