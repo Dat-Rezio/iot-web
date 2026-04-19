@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const db = require('../config/db');
+const dashboardController = require('../controllers/dashboardController');
 
 // ================= SWAGGER TAGS =================
 
@@ -93,25 +93,7 @@ const db = require('../config/db');
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.get('/latest', async (req, res) => {
-    try {
-        const [rows] = await db.query(`
-            SELECT sh.sensor_id, s.sensor_name, s.unit, sh.value, sh.timestamp
-            FROM sensor_history sh
-            JOIN sensors s ON sh.sensor_id = s.id
-            WHERE sh.id IN (
-                SELECT MAX(id) FROM sensor_history GROUP BY sensor_id
-            )
-        `);
-
-        res.json(rows);
-    } catch (error) {
-        res.status(500).json({
-            message: "Server error",
-            error: error.message
-        });
-    }
-});
+router.get('/latest', dashboardController.getLatestData);
 
 /**
  * @swagger
@@ -136,26 +118,6 @@ router.get('/latest', async (req, res) => {
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.get('/chart-init', async (req, res) => {
-    try {
-        const [rows] = await db.query(`
-            SELECT sensor_id, value, timestamp
-            FROM (
-                SELECT *,
-                       ROW_NUMBER() OVER (PARTITION BY sensor_id ORDER BY timestamp DESC) AS rn
-                FROM sensor_history
-            ) t
-            WHERE rn <= 10
-            ORDER BY sensor_id, timestamp DESC
-        `);
-
-        res.json(rows);
-    } catch (error) {
-        res.status(500).json({
-            message: "Server error",
-            error: error.message
-        });
-    }
-});
+router.get('/chart-init', dashboardController.getChartInitData);
 
 module.exports = router;
